@@ -87,6 +87,10 @@ _MOD_BIT_TO_HID = {
 _DOUBLE_CLICK_SECONDS = 0.45
 _DOUBLE_CLICK_SLOP = 6.0
 
+# How long our own idea of the pointer position stays authoritative after we
+# post an event. See MacInjector._position.
+_POSITION_TRUST_SECONDS = 0.05
+
 
 def _display_bounds() -> tuple[float, float, float, float]:
     """Union of every active display, so the pointer can reach all of them."""
@@ -141,6 +145,10 @@ class MacInjector:
         self._bounds = _display_bounds()
         self._bounds_checked = time.monotonic()
 
+        # Where we last told the pointer to be, and when. See _position.
+        self._pos: tuple[float, float] | None = None
+        self._posted_at = 0.0
+
     # -- helpers ------------------------------------------------------------
     def _remap(self, hid: int) -> int:
         if self._swap:
@@ -150,6 +158,26 @@ class MacInjector:
     def _cursor(self) -> tuple[float, float]:
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
         return (loc.x, loc.y)
+
+    def _position(self) -> tuple[float, float]:
+        """Where the pointer is, without waiting for the window server.
+
+        CGEventPost is asynchronous: the cursor CGEventGetLocation reports
+        catches up a few milliseconds after the event is posted. Motion
+        arrives in bursts -- a touchpad emits well over 100 events a second
+        and TCP hands us several at once -- so reading the system position per
+        event meant every move in a burst started from the same stale point
+        and all but the last were thrown away. A flick then moved the pointer
+        a fraction of the distance it should have.
+
+        So while a burst is in flight, our own last posted position is the
+        authoritative one. Once things have been quiet long enough for the
+        window server to have settled -- or for someone to have moved the
+        Mac's own mouse -- go back to asking the system.
+        """
+        if self._pos is None or time.monotonic() - self._posted_at > _POSITION_TRUST_SECONDS:
+            self._pos = self._cursor()
+        return self._pos
 
     def _clamp(self, x: float, y: float) -> tuple[float, float]:
         # Displays can come and go (the Mac mini's capture card is hot-plug),
@@ -195,8 +223,10 @@ class MacInjector:
         if step_x == 0 and step_y == 0:
             return
 
-        cx, cy = self._cursor()
+        cx, cy = self._position()
         nx, ny = self._clamp(cx + step_x, cy + step_y)
+        self._pos = (nx, ny)
+        self._posted_at = time.monotonic()
 
         drag = self._drag()
         if drag is not None:
@@ -217,7 +247,11 @@ class MacInjector:
         if spec is None:
             return
         mac_btn, down_type, up_type, _drag = spec
-        x, y = self._cursor()
+        # Same staleness problem as move(): a click that lands immediately
+        # after a fast drag must use the position we just moved to, not the
+        # one the window server has caught up to.
+        x, y = self._position()
+        self._posted_at = time.monotonic()
 
         click_state = 1
         if down:
@@ -347,6 +381,9 @@ class MacInjector:
         self._flags = 0
         self._move_acc_x = self._move_acc_y = 0.0
         self._scroll_acc_x = self._scroll_acc_y = 0.0
+        # Next move re-reads the real cursor rather than resuming from
+        # wherever the last session left off.
+        self._pos = None
 
     def close(self) -> None:
         self.release_all()

@@ -15,6 +15,7 @@ import struct
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 NONCE_LEN = 32
 CONFIRM = b"wkm-confirm-v1"
@@ -24,6 +25,12 @@ CONFIRM = b"wkm-confirm-v1"
 _SCRYPT_N = 1 << 14
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+
+# scrypt comes from `cryptography`, not hashlib. The python macOS ships is
+# linked against LibreSSL, which does not expose scrypt at all, so
+# hashlib.scrypt is simply missing there -- and that is the interpreter the
+# Mac side is meant to run on. Both are the same standard KDF, so a Mac and a
+# Windows machine still derive identical keys.
 
 
 class AuthError(Exception):
@@ -40,15 +47,13 @@ def derive_keys(passphrase: str, client_nonce: bytes, server_nonce: bytes) -> tu
     Both nonces feed the salt, so two runs with the same passphrase never reuse
     a key and a recorded session cannot be replayed against a live one.
     """
-    master = hashlib.scrypt(
-        passphrase.encode("utf-8"),
+    master = Scrypt(
         salt=client_nonce + server_nonce,
+        length=32,
         n=_SCRYPT_N,
         r=_SCRYPT_R,
         p=_SCRYPT_P,
-        dklen=32,
-        maxmem=64 * 1024 * 1024,
-    )
+    ).derive(passphrase.encode("utf-8"))
     return _subkey(master, b"wkm-c2s"), _subkey(master, b"wkm-s2c")
 
 
