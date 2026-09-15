@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wkm"
+version = "1.0.0"
+description = "Toggle your laptop's keyboard and touchpad over to another machine over WiFi"
+requires-python = ">=3.9"
+dependencies = [
+    "cryptography>=42.0",
+    "pyobjc-framework-Quartz>=10.0 ; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+wkm = "wkm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["wkm*"]

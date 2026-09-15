@@ -1,0 +1,5 @@
+# Required on BOTH machines
+cryptography>=42.0
+
+# Required on macOS only (ignored on Windows)
+pyobjc-framework-Quartz>=10.0 ; sys_platform == "darwin"
