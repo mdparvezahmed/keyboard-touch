@@ -9,6 +9,7 @@ keyboard you may not be able to reach.
 
 from __future__ import annotations
 
+import queue
 import socket
 import sys
 import threading
@@ -28,8 +29,12 @@ class Target:
         self.log = log
         self._stop = threading.Event()
         self._srv: socket.socket | None = None
+        self._incoming: queue.Queue = queue.Queue()
+        self._link: net.Link | None = None
+        self._link_lock = threading.Lock()
         self._injector = make_injector(
             modifier_mode=cfg.modifier_mode,
+            modifier_map=cfg.modifier_map,
             pointer_speed=cfg.pointer_speed,
             scroll_speed=cfg.scroll_speed,
             natural_scroll=cfg.natural_scroll,
@@ -62,18 +67,23 @@ class Target:
             )
         self.log("listening on " + self.cfg.bind + ":" + str(self.cfg.port))
         self.log("waiting for the other machine to connect...")
+
+        # Accept on its own thread so a newly arriving source can take over
+        # from a session that is wedged. A source killed mid-connection leaves
+        # a half-open socket the OS will not report as dead for a long time,
+        # and without preemption the target sits in it, still answering
+        # discovery but refusing every new connection -- which looks exactly
+        # like a firewall problem and is not one.
+        acceptor = threading.Thread(target=self._accept_loop, name="wkm-accept", daemon=True)
+        acceptor.start()
         try:
             while not self._stop.is_set():
                 try:
-                    link = net.accept(self._srv, self.cfg.passphrase, net.ROLE_TARGET)
-                except OSError:
-                    if self._stop.is_set():
-                        break
+                    link = self._incoming.get(timeout=0.5)
+                except queue.Empty:
                     continue
-                except net.LinkError as exc:
-                    # A bad passphrase or a port scanner; log and keep serving.
-                    self.log("rejected connection: " + str(exc))
-                    continue
+                with self._link_lock:
+                    self._link = link
                 self.log("connected: " + link.peer)
                 try:
                     self._serve(link)
@@ -82,6 +92,9 @@ class Target:
                 finally:
                     self._injector.release_all()
                     link.close()
+                    with self._link_lock:
+                        if self._link is link:
+                            self._link = None
                     self.log("disconnected; waiting for the next connection")
         finally:
             if responder is not None:
@@ -89,6 +102,26 @@ class Target:
             self._injector.close()
             if self._srv is not None:
                 self._srv.close()
+
+    def _accept_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                link = net.accept(self._srv, self.cfg.passphrase, net.ROLE_TARGET)
+            except OSError:
+                if self._stop.is_set():
+                    return
+                continue
+            except net.LinkError as exc:
+                # A bad passphrase or a port scanner. Never let it disturb the
+                # session that is already running.
+                self.log("rejected connection: " + str(exc))
+                continue
+            with self._link_lock:
+                previous = self._link
+            if previous is not None:
+                self.log("new source connected; dropping the previous session")
+                previous.close()
+            self._incoming.put(link)
 
     def _serve(self, link: net.Link) -> None:
         link.sock.settimeout(_RECV_TIMEOUT)

@@ -712,3 +712,223 @@ class TestTomlFallback(unittest.TestCase):
         self.assertEqual(
             self._toml.load(io.BytesIO(b'a = "\xc3\xa9"\n')), {"a": "é"}
         )
+
+
+class TestModifierRemap(unittest.TestCase):
+    """The arrangement of Ctrl / Win / Alt when they land on the other machine."""
+
+    def _names(self, mode="positional", custom=""):
+        table = keymap.modifier_remap(mode, custom)
+        return dict(keymap.describe_modifier_map(table, "darwin"))
+
+    def test_named_modes(self):
+        self.assertEqual(
+            self._names("positional"),
+            {"Ctrl": "Control", "Win": "Command", "Alt": "Option"},
+        )
+        # The physical match: on both keyboards the key beside the spacebar
+        # becomes Command.
+        self.assertEqual(
+            self._names("mac_layout"),
+            {"Ctrl": "Control", "Win": "Option", "Alt": "Command"},
+        )
+        self.assertEqual(
+            self._names("swap_ctrl_cmd"),
+            {"Ctrl": "Command", "Win": "Control", "Alt": "Option"},
+        )
+
+    def test_custom_map_overrides_the_mode(self):
+        got = self._names("positional", "alt=command, win=option")
+        self.assertEqual(got["Alt"], "Command")
+        self.assertEqual(got["Win"], "Option")
+
+    def test_both_sides_of_the_keyboard_move_together(self):
+        table = keymap.modifier_remap("mac_layout")
+        self.assertEqual(table[keymap.HID_LALT], keymap.HID_LGUI)
+        self.assertEqual(table[keymap.HID_RALT], keymap.HID_RGUI)
+        self.assertEqual(table[keymap.HID_LGUI], keymap.HID_LALT)
+        self.assertEqual(table[keymap.HID_RGUI], keymap.HID_RALT)
+
+    def test_non_modifier_keys_are_untouched(self):
+        table = keymap.modifier_remap("mac_layout")
+        for hid in (keymap.HID_A, keymap.HID_ENTER, keymap.HID_LSHIFT, keymap.HID_F1):
+            self.assertNotIn(hid, table, hex(hid))
+
+    def test_bad_specs_are_rejected(self):
+        for bad in ("alt", "alt=banana", "banana=command", "", "   "):
+            with self.assertRaises(keymap.ModifierMapError, msg=bad):
+                keymap.modifier_remap("positional", bad if bad.strip() else "x")
+        with self.assertRaises(keymap.ModifierMapError):
+            keymap.modifier_remap("nonsense-mode")
+
+    def test_config_validates_the_map(self):
+        cfg = wkm_config.Config(passphrase="long-enough-passphrase")
+        cfg.modifier_mode = "mac_layout"
+        cfg.validate()
+        cfg.modifier_map = "alt=command, win=option"
+        cfg.validate()
+        cfg.modifier_map = "alt=banana"
+        with self.assertRaises(wkm_config.ConfigError):
+            cfg.validate()
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows injector")
+class TestRemapAppliedOnce(unittest.TestCase):
+    def test_release_all_does_not_remap_twice(self):
+        """A non-symmetric map must not be applied again on release.
+
+        Held keys are stored post-remap; replaying them through the remapping
+        path would translate them a second time and release the wrong key.
+        """
+        from wkm.platform.win_inject import WindowsInjector
+
+        inj = WindowsInjector(modifier_map="ctrl=command, win=command, alt=option")
+        sent = []
+        inj._send = lambda *inputs: sent.extend(inputs)  # type: ignore[assignment]
+
+        inj.key(keymap.HID_LCTRL, True)
+        self.assertEqual(inj._held_keys, {keymap.HID_LGUI}, "ctrl should be held as GUI")
+
+        inj.release_all()
+        self.assertEqual(inj._held_keys, set())
+        # Two events total: one press, one release -- not a third from a
+        # second translation.
+        self.assertEqual(len(sent), 2)
+
+
+@unittest.skipUnless(sys.platform == "win32", "needs a capturer to construct")
+class TestSourceSideRemap(unittest.TestCase):
+    """Modifiers are translated before they leave the source machine.
+
+    Doing it here means the arrangement is set on the machine you sit at, and
+    the far end needs no matching configuration or code change.
+    """
+
+    def _source(self, **kw):
+        from wkm.source import Source
+
+        cfg = wkm_config.Config(
+            passphrase="long-enough-passphrase", indicator=False, beep=False, **kw
+        )
+        cfg.validate()
+        src = Source(cfg, lambda *a: None)
+        sent = []
+        src._send = lambda records: sent.extend(records)  # type: ignore[assignment]
+        return src, sent
+
+    def test_mac_layout_sends_alt_as_command(self):
+        src, sent = self._source(modifier_mode="mac_layout")
+        src._process(("key", keymap.HID_LALT, True))
+        self.assertEqual(
+            [protocol.parse(r) for r in sent],
+            [("key", keymap.HID_LGUI, True)],
+            "Alt should travel as GUI, which macOS renders as Command",
+        )
+
+    def test_mac_layout_sends_win_as_option(self):
+        src, sent = self._source(modifier_mode="mac_layout")
+        src._process(("key", keymap.HID_LGUI, True))
+        self.assertEqual(
+            [protocol.parse(r) for r in sent], [("key", keymap.HID_LALT, True)]
+        )
+
+    def test_positional_changes_nothing(self):
+        src, sent = self._source(modifier_mode="positional")
+        for hid in (keymap.HID_LALT, keymap.HID_LGUI, keymap.HID_LCTRL):
+            src._process(("key", hid, True))
+        self.assertEqual(
+            [protocol.parse(r)[1] for r in sent],
+            [keymap.HID_LALT, keymap.HID_LGUI, keymap.HID_LCTRL],
+        )
+
+    def test_ordinary_keys_are_never_touched(self):
+        src, sent = self._source(modifier_mode="mac_layout")
+        for hid in (keymap.HID_A, keymap.HID_ENTER, keymap.HID_LSHIFT):
+            src._process(("key", hid, True))
+        self.assertEqual(
+            [protocol.parse(r)[1] for r in sent],
+            [keymap.HID_A, keymap.HID_ENTER, keymap.HID_LSHIFT],
+        )
+
+    def test_mod_mask_is_remapped_too(self):
+        table = keymap.modifier_remap("mac_layout")
+        got = keymap.remap_mod_mask(protocol.MOD_LALT, table)
+        self.assertEqual(got, protocol.MOD_LGUI)
+        got = keymap.remap_mod_mask(protocol.MOD_LCTRL | protocol.MOD_LGUI, table)
+        self.assertEqual(got, protocol.MOD_LCTRL | protocol.MOD_LALT)
+
+
+class TestTargetPreemption(unittest.TestCase):
+    """A wedged session must not lock out the machine forever.
+
+    A source killed mid-connection leaves a half-open socket that the OS will
+    not report as dead for a long time. The symptom is nasty: discovery keeps
+    answering while every new connection times out, which looks like a
+    firewall and is not one.
+    """
+
+    def _start_target(self):
+        from wkm.target import Target
+
+        # Grab a free port first: the config rightly refuses port 0.
+        probe = net.listen("127.0.0.1", 0)
+        port = probe.getsockname()[1]
+        probe.close()
+
+        cfg = wkm_config.Config(
+            passphrase=PASSPHRASE, port=port, bind="127.0.0.1", discovery=False
+        )
+        cfg.validate()
+        tgt = Target(cfg, lambda *a: None)
+
+        thread = threading.Thread(target=tgt.run, daemon=True)
+        thread.start()
+        for _ in range(100):
+            try:
+                probe = socket.create_connection(("127.0.0.1", port), timeout=0.2)
+                probe.close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        return tgt, port, thread
+
+    def test_second_source_takes_over_from_a_stuck_one(self):
+        tgt, port, thread = self._start_target()
+        try:
+            first = net.connect("127.0.0.1", port, PASSPHRASE, net.ROLE_SOURCE)
+            first.send(protocol.ping())
+            first.sock.settimeout(3.0)
+            self.assertEqual(protocol.parse(first.recv()), ("pong",))
+
+            # Abandon it without closing -- exactly what a killed process does.
+            second = net.connect("127.0.0.1", port, PASSPHRASE, net.ROLE_SOURCE)
+            second.sock.settimeout(5.0)
+            second.send(protocol.ping())
+            self.assertEqual(
+                protocol.parse(second.recv()),
+                ("pong",),
+                "a new source must get through even while an old session hangs",
+            )
+            second.close()
+            try:
+                first.close()
+            except OSError:
+                pass
+        finally:
+            tgt.shutdown()
+            thread.join(3)
+
+    def test_a_wrong_passphrase_does_not_disturb_the_live_session(self):
+        tgt, port, thread = self._start_target()
+        try:
+            good = net.connect("127.0.0.1", port, PASSPHRASE, net.ROLE_SOURCE)
+            good.sock.settimeout(3.0)
+            with self.assertRaises(net.LinkError):
+                net.connect("127.0.0.1", port, "a-completely-different-secret",
+                            net.ROLE_SOURCE)
+            good.send(protocol.ping())
+            self.assertEqual(protocol.parse(good.recv()), ("pong",))
+            good.close()
+        finally:
+            tgt.shutdown()
+            thread.join(3)

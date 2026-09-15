@@ -65,14 +65,6 @@ _MOD_FLAGS = {
     keymap.HID_RGUI: (_FLAG_CMD, _NX_RCMD),
 }
 
-# Ctrl and Command trade places, for fingers that refuse to relearn copy/paste.
-_SWAP_CTRL_CMD = {
-    keymap.HID_LCTRL: keymap.HID_LGUI,
-    keymap.HID_LGUI: keymap.HID_LCTRL,
-    keymap.HID_RCTRL: keymap.HID_RGUI,
-    keymap.HID_RGUI: keymap.HID_RCTRL,
-}
-
 _MOD_BIT_TO_HID = {
     protocol.MOD_LCTRL: keymap.HID_LCTRL,
     protocol.MOD_LSHIFT: keymap.HID_LSHIFT,
@@ -120,12 +112,14 @@ class MacInjector:
     def __init__(
         self,
         modifier_mode: str = "positional",
+        modifier_map: str = "",
         pointer_speed: float = 1.0,
         scroll_speed: float = 1.0,
         natural_scroll: bool = False,
         scroll_pixels_per_notch: float = 50.0,
+        **_ignored,
     ) -> None:
-        self._swap = modifier_mode == "swap_ctrl_cmd"
+        self._mods_remap = keymap.modifier_remap(modifier_mode, modifier_map)
         self._pointer_speed = max(0.05, float(pointer_speed))
         self._scroll_speed = max(0.05, float(scroll_speed))
         self._natural = bool(natural_scroll)
@@ -151,9 +145,8 @@ class MacInjector:
 
     # -- helpers ------------------------------------------------------------
     def _remap(self, hid: int) -> int:
-        if self._swap:
-            return _SWAP_CTRL_CMD.get(hid, hid)
-        return hid
+        """Apply the configured modifier arrangement. Identity for other keys."""
+        return self._mods_remap.get(hid, hid)
 
     def _cursor(self) -> tuple[float, float]:
         loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))

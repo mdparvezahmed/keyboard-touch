@@ -66,7 +66,8 @@ class Config:
     natural_scroll: bool = False
 
     # --- target-side behaviour (the machine being driven) ---
-    modifier_mode: str = "positional"  # positional | swap_ctrl_cmd
+    modifier_mode: str = "positional"  # positional | mac_layout | swap_ctrl_cmd
+    modifier_map: str = ""             # e.g. "ctrl=control, win=option, alt=command"
     bind: str = "0.0.0.0"
 
     # --- diagnostics ---
@@ -84,8 +85,12 @@ class Config:
             raise ConfigError("passphrase must be at least 8 characters")
         if self.mouse_source not in ("auto", "raw", "hook"):
             raise ConfigError("mouse_source must be auto, raw or hook")
-        if self.modifier_mode not in ("positional", "swap_ctrl_cmd"):
-            raise ConfigError("modifier_mode must be positional or swap_ctrl_cmd")
+        from . import keymap
+
+        try:
+            keymap.modifier_remap(self.modifier_mode, self.modifier_map)
+        except keymap.ModifierMapError as exc:
+            raise ConfigError(str(exc))
         if not (1 <= self.port <= 65535):
             raise ConfigError("port must be between 1 and 65535")
 
@@ -180,12 +185,26 @@ natural_scroll = false
 # Target side -- the machine being driven (your Mac mini)
 # ---------------------------------------------------------------------------
 
-# How the Windows modifier keys land on macOS.
-#   "positional"    Win -> Command, Alt -> Option, Ctrl -> Control.
-#                   The keys keep their physical position, so Win+C copies.
-#   "swap_ctrl_cmd" Ctrl -> Command, Win -> Control.
-#                   Pick this if your fingers insist that Ctrl+C is copy.
+# How the Windows modifier keys land on macOS. The two keyboards order their
+# modifiers differently, so there is no neutral answer -- only the one your
+# hands already expect:
+#
+#     PC    [Ctrl] [Win]    [Alt]     [Space]
+#     Mac   [Ctrl] [Option] [Command] [Space]
+#
+#   "positional"    Ctrl -> Control, Win -> Command, Alt -> Option
+#                   Each key keeps its own slot. Copy is Win+C.
+#   "mac_layout"    Ctrl -> Control, Win -> Option,  Alt -> Command
+#                   Matches the physical order above: the key beside the
+#                   spacebar is Command on both keyboards, so your thumb
+#                   finds it where a Mac keyboard would put it. Copy is Alt+C.
+#   "swap_ctrl_cmd" Ctrl -> Command, Win -> Control, Alt -> Option
+#                   For fingers that insist Ctrl+C is copy.
 modifier_mode = "positional"
+
+# Or spell it out yourself, which overrides modifier_mode entirely.
+# Sources: ctrl, win, alt.  Targets: control, option, command.
+# modifier_map = "ctrl=control, win=option, alt=command"
 
 # ---------------------------------------------------------------------------
 # Link

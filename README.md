@@ -122,11 +122,36 @@ still draws on top of it.
 
 ### Modifier keys
 
-By default the mapping is **positional**: the key in the Command position sends
-Command. On a PC keyboard that means:
+The two keyboards order their modifiers differently, so there is no neutral
+answer -- only the one your hands expect:
 
-| Windows key | lands on macOS as |
-|---|---|
+```
+PC     [Ctrl] [Win]     [Alt]      [ Space ]
+Mac    [Ctrl] [Option]  [Command]  [ Space ]
+```
+
+Set `modifier_mode` **in the Mac's `wkm.toml`** (the machine being driven is
+the one that decides how incoming modifiers land):
+
+| `modifier_mode` | Ctrl | Win | Alt | Copy is |
+|---|---|---|---|---|
+| `positional` *(default)* | Control | Command | Option | Win+C |
+| `mac_layout` | Control | Option | **Command** | **Alt+C** |
+| `swap_ctrl_cmd` | Command | Control | Option | Ctrl+C |
+
+`mac_layout` matches the picture above: the key next to the spacebar is Command
+on both keyboards, so your thumb finds it where a Mac keyboard would put it.
+
+Anything else, spell it out — this overrides `modifier_mode`:
+
+```toml
+modifier_map = "ctrl=control, win=option, alt=command"
+```
+
+Sources are `ctrl`, `win`, `alt`; targets are `control`, `option`, `command`.
+Left and right keys always move together.
+
+---|---|
 | `Win` | `Command` |
 | `Alt` | `Option` |
 | `Ctrl` | `Control` |

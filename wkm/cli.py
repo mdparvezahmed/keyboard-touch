@@ -229,12 +229,39 @@ def cmd_doctor(args) -> int:
         check("handshake", False, str(exc))
         return 1
     except OSError as exc:
-        check(
-            "handshake",
-            False,
-            str(exc) + "  (firewall? on Windows allow python.exe on Private networks)",
-        )
-        return 1
+        if cfg.host and cfg.discovery:
+            print("         " + str(exc) + " -- trying discovery, as wkm itself would")
+            found = discovery.find(cfg.passphrase, timeout=4.0)
+            if found and (found[0], found[1]) != (target_host, target_port):
+                target_host, target_port, name = found
+                print("         found " + (name or "target") + " at "
+                      + target_host + ":" + str(target_port))
+                try:
+                    link = net.connect(
+                        target_host, target_port, cfg.passphrase, net.ROLE_SOURCE
+                    )
+                except (OSError, net.LinkError) as exc2:
+                    check("handshake", False, str(exc2))
+                    return 1
+                print("         update host in wkm.toml to " + target_host)
+            elif found:
+                check(
+                    "handshake",
+                    False,
+                    "the target answers discovery at " + found[0] + " but refuses TCP on port "
+                    + str(found[1]) + ". Its process is most likely wedged -- restart it.",
+                )
+                return 1
+            else:
+                check("handshake", False, str(exc) + " and nothing answered discovery")
+                return 1
+        else:
+            check(
+                "handshake",
+                False,
+                str(exc) + "  (firewall? on Windows allow python.exe on Private networks)",
+            )
+            return 1
     try:
         from . import protocol
 

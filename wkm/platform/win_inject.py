@@ -110,15 +110,16 @@ class WindowsInjector:
     def __init__(
         self,
         modifier_mode: str = "positional",
+        modifier_map: str = "",
         pointer_speed: float = 1.0,
         scroll_speed: float = 1.0,
         natural_scroll: bool = False,
         **_ignored,
     ) -> None:
+        self._mods_remap = keymap.modifier_remap(modifier_mode, modifier_map)
         self._pointer_speed = max(0.05, float(pointer_speed))
         self._scroll_speed = max(0.05, float(scroll_speed))
         self._natural = bool(natural_scroll)
-        self._swap = modifier_mode == "swap_ctrl_cmd"
         self._held_keys: set[int] = set()
         self._held_buttons: set[int] = set()
         self._acc_x = 0.0
@@ -128,14 +129,8 @@ class WindowsInjector:
 
     # -- helpers ------------------------------------------------------------
     def _remap(self, hid: int) -> int:
-        if not self._swap:
-            return hid
-        return {
-            keymap.HID_LGUI: keymap.HID_LCTRL,
-            keymap.HID_LCTRL: keymap.HID_LGUI,
-            keymap.HID_RGUI: keymap.HID_RCTRL,
-            keymap.HID_RCTRL: keymap.HID_RGUI,
-        }.get(hid, hid)
+        """Apply the configured modifier arrangement. Identity for other keys."""
+        return self._mods_remap.get(hid, hid)
 
     @staticmethod
     def _send(*inputs: INPUT) -> None:
@@ -204,7 +199,16 @@ class WindowsInjector:
             self._send(*events)
 
     def key(self, hid: int, down: bool) -> None:
-        hid = self._remap(hid)
+        self._emit_key(self._remap(hid), down)
+
+    def _emit_key(self, hid: int, down: bool) -> None:
+        """Send an already-remapped key.
+
+        _held_keys stores post-remap usages, so anything replaying them must
+        come through here. Sending them back through key() would apply the
+        substitution a second time -- invisible for a symmetric swap, wrong
+        for any custom map that is not its own inverse.
+        """
         mapped = keymap.hid_to_win(hid)
         if mapped is None:
             return
@@ -223,11 +227,11 @@ class WindowsInjector:
             target = self._remap(hid)
             want = bool(mask & bit)
             if want != (target in self._held_keys):
-                self.key(hid, want)
+                self._emit_key(target, want)
 
     def release_all(self) -> None:
         for hid in list(self._held_keys):
-            self.key(hid, False)
+            self._emit_key(hid, False)
         self._held_keys.clear()
         for btn in list(self._held_buttons):
             self.button(btn, False)

@@ -18,7 +18,7 @@ import queue
 import threading
 import time
 
-from . import discovery, net, notify, protocol
+from . import discovery, keymap, net, notify, protocol
 from .config import Config
 from .platform import make_capturer
 
@@ -50,6 +50,11 @@ class Source:
         self._last_ping = 0.0
         self._peer_label = ""
         self._dropped = 0
+
+        # Remapping here rather than on the target means the arrangement is
+        # configured on the machine you actually sit at, and the other end
+        # needs no matching change -- it just receives the keys you meant.
+        self._mods_remap = keymap.modifier_remap(cfg.modifier_mode, cfg.modifier_map)
 
         self._feedback = notify.Feedback(cfg.indicator, cfg.beep)
         self._capturer = make_capturer(
@@ -130,7 +135,7 @@ class Source:
                 continue
             flush_motion()
             if kind == "key":
-                batch.append(protocol.key(item[1], item[2]))
+                batch.append(protocol.key(self._mods_remap.get(item[1], item[1]), item[2]))
             elif kind == "button":
                 batch.append(protocol.button(item[1], item[2]))
             elif kind == "scroll":
@@ -153,7 +158,8 @@ class Source:
             # their release is about to be swallowed. Clear them here, off the
             # input thread, where injecting events is safe.
             self._capturer.sync_local_modifiers()
-            self._send([protocol.enter(), protocol.mods(self._capturer.mods)])
+            live_mods = keymap.remap_mod_mask(self._capturer.mods, self._mods_remap)
+            self._send([protocol.enter(), protocol.mods(live_mods)])
             self._feedback.remote(self._peer_label)
             self.log("control -> " + (self._peer_label or "remote"))
         else:

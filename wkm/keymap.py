@@ -308,3 +308,113 @@ def hotkey_matches(required_mask: int, required_hid: int, hid: int, live_mask: i
         if bool(required_mask & group) != bool(live_mask & group):
             return False
     return True
+
+# --------------------------------------------------------------------------
+# Modifier remapping
+#
+# A PC and a Mac put their modifiers in a different order:
+#
+#     PC    [Ctrl] [Win]    [Alt]     [Space]
+#     Mac   [Ctrl] [Option] [Command] [Space]
+#
+# so there is no single correct answer, only the one your hands expect. These
+# are expressed as substitutions applied before the key is looked up, so the
+# platform backends stay ignorant of the whole question.
+# --------------------------------------------------------------------------
+_MOD_SOURCE_KEYS = {
+    "ctrl": (HID_LCTRL, HID_RCTRL),
+    "control": (HID_LCTRL, HID_RCTRL),
+    "win": (HID_LGUI, HID_RGUI),
+    "super": (HID_LGUI, HID_RGUI),
+    "meta": (HID_LGUI, HID_RGUI),
+    "alt": (HID_LALT, HID_RALT),
+}
+
+# What the destination key should behave as. On macOS, GUI is Command and ALT
+# is Option; on Windows, GUI is the Windows key and ALT is Alt.
+_MOD_TARGET_KEYS = {
+    "control": (HID_LCTRL, HID_RCTRL),
+    "ctrl": (HID_LCTRL, HID_RCTRL),
+    "option": (HID_LALT, HID_RALT),
+    "alt": (HID_LALT, HID_RALT),
+    "command": (HID_LGUI, HID_RGUI),
+    "cmd": (HID_LGUI, HID_RGUI),
+    "win": (HID_LGUI, HID_RGUI),
+}
+
+#: Named arrangements. "positional" keeps each key in its own modifier slot;
+#: "mac_layout" matches the physical order above, so the key beside the
+#: spacebar is Command on both keyboards.
+MODIFIER_MODES = {
+    "positional": "ctrl=control, win=command, alt=option",
+    "mac_layout": "ctrl=control, win=option, alt=command",
+    "swap_ctrl_cmd": "ctrl=command, win=control, alt=option",
+}
+
+
+class ModifierMapError(ValueError):
+    pass
+
+
+def parse_modifier_map(spec: str) -> dict:
+    """Parse "ctrl=control, win=option, alt=command" into a HID substitution."""
+    table: dict = {}
+    for clause in spec.replace(";", ",").split(","):
+        clause = clause.strip().lower()
+        if not clause:
+            continue
+        source, sep, target = clause.partition("=")
+        if not sep:
+            raise ModifierMapError(
+                "modifier_map entry " + repr(clause) + " should look like alt=command"
+            )
+        source = source.strip()
+        target = target.strip()
+        if source not in _MOD_SOURCE_KEYS:
+            raise ModifierMapError(
+                "unknown key " + repr(source) + " in modifier_map; use ctrl, win or alt"
+            )
+        if target not in _MOD_TARGET_KEYS:
+            raise ModifierMapError(
+                "unknown target " + repr(target) + " in modifier_map; "
+                "use control, option or command"
+            )
+        for src_hid, dst_hid in zip(_MOD_SOURCE_KEYS[source], _MOD_TARGET_KEYS[target]):
+            table[src_hid] = dst_hid
+    if not table:
+        raise ModifierMapError("modifier_map is empty")
+    return table
+
+
+def modifier_remap(mode: str = "positional", custom: str = "") -> dict:
+    """Substitution table for modifiers; custom wins over the named mode."""
+    if custom.strip():
+        return parse_modifier_map(custom)
+    try:
+        return parse_modifier_map(MODIFIER_MODES[mode])
+    except KeyError:
+        raise ModifierMapError(
+            "unknown modifier_mode " + repr(mode) + "; choose one of "
+            + ", ".join(sorted(MODIFIER_MODES))
+        )
+
+
+def describe_modifier_map(table: dict, target_os: str) -> list:
+    """Human-readable rows for logs and diagnostics."""
+    mac = {HID_LCTRL: "Control", HID_LALT: "Option", HID_LGUI: "Command"}
+    win = {HID_LCTRL: "Ctrl", HID_LALT: "Alt", HID_LGUI: "Win"}
+    names = mac if target_os == "darwin" else win
+    rows = []
+    for label, hid in (("Ctrl", HID_LCTRL), ("Win", HID_LGUI), ("Alt", HID_LALT)):
+        rows.append((label, names.get(table.get(hid, hid), "?")))
+    return rows
+
+def remap_mod_mask(mask: int, table: dict) -> int:
+    """Apply a modifier substitution to a packed modifier mask."""
+    if not table:
+        return mask
+    out = 0
+    for hid, bit in _MOD_BIT.items():
+        if mask & bit:
+            out |= _MOD_BIT.get(table.get(hid, hid), bit)
+    return out
