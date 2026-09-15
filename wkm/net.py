@@ -14,6 +14,9 @@ import threading
 from . import crypto, protocol
 
 HANDSHAKE_TIMEOUT = 10.0
+#: Reaching a machine on your own LAN takes milliseconds. Waiting the full
+#: handshake timeout on the TCP connect only delays noticing a stale address.
+CONNECT_TIMEOUT = 4.0
 _HELLO = struct.Struct("<4sBB")  # magic, version, role
 ROLE_SOURCE = 1
 ROLE_TARGET = 2
@@ -168,7 +171,7 @@ def _handshake(sock: socket.socket, passphrase: str, *, is_client: bool, role: i
 
 
 def connect(host: str, port: int, passphrase: str, role: int = ROLE_SOURCE) -> Link:
-    sock = socket.create_connection((host, port), timeout=HANDSHAKE_TIMEOUT)
+    sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
     tune(sock)
     try:
         return _handshake(sock, passphrase, is_client=True, role=role)

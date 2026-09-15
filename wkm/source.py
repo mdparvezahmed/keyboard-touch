@@ -246,20 +246,36 @@ class Source:
                 return
 
     def _open(self) -> net.Link:
-        host = self.cfg.host
         port = self.cfg.port
-        if not host:
-            if not self.cfg.discovery:
-                raise net.LinkError("no host configured and discovery is disabled")
-            found = discovery.find(self.cfg.passphrase, timeout=3.0)
-            if not found:
-                raise net.LinkError(
-                    "could not find the target on this network. Check it is running "
-                    "'wkm target', then set host = \"<its IP>\" in wkm.toml if your "
-                    "WiFi blocks broadcast between devices."
+        if self.cfg.host:
+            try:
+                return net.connect(self.cfg.host, port, self.cfg.passphrase, net.ROLE_SOURCE)
+            except OSError as exc:
+                # A pinned address is a shortcut, not a commitment. DHCP will
+                # eventually move the target, and falling back to discovery
+                # means that fixes itself instead of looking like a dead link.
+                if not self.cfg.discovery:
+                    raise
+                self.log(
+                    self.cfg.host + " did not answer (" + str(exc) + ")"
+                    + " -- looking for the target on the network instead"
                 )
-            host, port, name = found
-            self.log("found " + (name or host) + " at " + host + ":" + str(port))
+            # A LinkError here is a real mismatch (wrong passphrase, wrong
+            # protocol version) and must not be retried against someone else.
+
+        if not self.cfg.discovery:
+            raise net.LinkError("no host configured and discovery is disabled")
+        found = discovery.find(self.cfg.passphrase, timeout=3.0)
+        if not found:
+            raise net.LinkError(
+                "could not find the target on this network. Check it is running "
+                "'wkm target', then set host = \"<its IP>\" in wkm.toml if your "
+                "WiFi blocks broadcast between devices."
+            )
+        host, port, name = found
+        self.log("found " + (name or host) + " at " + host + ":" + str(port))
+        if self.cfg.host:
+            self.log("tip: update host in wkm.toml to " + host + " to skip this lookup")
         return net.connect(host, port, self.cfg.passphrase, net.ROLE_SOURCE)
 
     def _read_loop(self, link: net.Link) -> None:

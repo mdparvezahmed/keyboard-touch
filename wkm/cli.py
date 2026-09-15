@@ -235,15 +235,31 @@ def cmd_doctor(args) -> int:
             str(exc) + "  (firewall? on Windows allow python.exe on Private networks)",
         )
         return 1
-    rtt_start = time.monotonic()
     try:
         from . import protocol
 
-        link.send(protocol.ping())
         link.sock.settimeout(3.0)
-        link.recv()
-        rtt = (time.monotonic() - rtt_start) * 1000
-        check("handshake + round trip", True, "%.2f ms" % rtt)
+        samples = []
+        for _ in range(7):
+            # perf_counter, not monotonic: on Windows before 3.13 monotonic is
+            # GetTickCount64, whose 15.6ms resolution reports a healthy 6ms
+            # link as 0.00ms.
+            started = time.perf_counter()
+            link.send(protocol.ping())
+            link.recv()
+            samples.append((time.perf_counter() - started) * 1000)
+        samples.sort()
+        median = samples[len(samples) // 2]
+        worst = samples[-1]
+        check(
+            "handshake + round trip",
+            True,
+            "%.1f ms median, %.1f ms worst" % (median, worst),
+        )
+        if worst > 40:
+            # Jitter is what you feel as stutter, not the median.
+            print("         note: that spread is WiFi jitter. 5 GHz helps; so does")
+            print("         moving off a congested channel.")
     except Exception as exc:
         check("round trip", False, str(exc))
     finally:
