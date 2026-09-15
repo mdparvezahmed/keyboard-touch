@@ -27,6 +27,8 @@ _PING_INTERVAL = 2.0
 _SILENCE_LIMIT = 8.0
 _RECONNECT_MIN = 1.0
 _RECONNECT_MAX = 10.0
+#: How often to say we are still waiting, once the reason has been stated.
+_RETRY_NOTICE_SECONDS = 30.0
 _DRAIN_BURST = 256
 
 #: Pointer deltas travel as int16, so a coalesced burst has to be split rather
@@ -191,17 +193,35 @@ class Source:
     # ------------------------------------------------------- connection loop
     def _connect_loop(self) -> None:
         backoff = _RECONNECT_MIN
+        last_error = ""
+        quiet_since = 0.0
+        attempts = 0
         while not self._stop.is_set():
             try:
                 link = self._open()
             except Exception as exc:
-                self.log("connect failed: " + str(exc))
+                # Say it in full once, then stay quiet. Waiting for the other
+                # machine to come up is the normal state, not a fault, and
+                # repeating the whole explanation every few seconds buries the
+                # moment it actually connects.
+                message = str(exc)
+                if message != last_error:
+                    self.log(message)
+                    last_error = message
+                    quiet_since = time.monotonic()
+                    attempts = 1
+                else:
+                    attempts += 1
+                    if time.monotonic() - quiet_since >= _RETRY_NOTICE_SECONDS:
+                        self.log("still looking... (" + str(attempts) + " attempts)")
+                        quiet_since = time.monotonic()
                 if self._stop.wait(backoff):
                     return
                 backoff = min(backoff * 1.7, _RECONNECT_MAX)
                 continue
 
             backoff = _RECONNECT_MIN
+            last_error = ""
             self._peer_label = link.peer
             with self._link_lock:
                 self._link = link
