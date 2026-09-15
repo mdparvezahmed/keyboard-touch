@@ -47,6 +47,7 @@ class Source:
         self._connected = threading.Event()
         self._last_rx = 0.0
         self._last_tx = 0.0
+        self._last_ping = 0.0
         self._peer_label = ""
         self._dropped = 0
 
@@ -165,7 +166,15 @@ class Source:
         if link is None:
             return
         now = time.monotonic()
-        if now - self._last_tx >= _PING_INTERVAL:
+        # Ping on its own schedule, not "only when we have been quiet".
+        # Keying this off the last send meant a moving pointer -- which
+        # refreshes _last_tx every few milliseconds -- suppressed the ping
+        # entirely. No ping means no pong, so _last_rx went stale and the
+        # silence check below dropped a healthy link after 8s of use. Outbound
+        # traffic says nothing about whether the peer is still there; only a
+        # round trip does.
+        if now - self._last_ping >= _PING_INTERVAL:
+            self._last_ping = now
             self._send([protocol.ping()])
         if self._last_rx and now - self._last_rx > _SILENCE_LIMIT:
             # WiFi drops are frequently silent; without this the link can sit
@@ -225,7 +234,7 @@ class Source:
             self._peer_label = link.peer
             with self._link_lock:
                 self._link = link
-            self._last_rx = self._last_tx = time.monotonic()
+            self._last_rx = self._last_tx = self._last_ping = time.monotonic()
             self._connected.set()
             self.log("connected to " + link.peer + " -- press " + self.cfg.hotkey + " to hand over control")
             try:

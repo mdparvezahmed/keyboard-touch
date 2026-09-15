@@ -101,7 +101,10 @@ class Target:
                 if time.monotonic() - last_rx > _SILENCE_LIMIT:
                     raise net.LinkError("source went quiet")
                 continue
-            except (OSError, net.LinkError):
+            except (OSError, net.LinkError) as exc:
+                # Say why. Returning silently here made a source-side drop
+                # indistinguishable from a normal disconnect in the log.
+                self.log("link lost: " + (str(exc) or exc.__class__.__name__))
                 return
             last_rx = time.monotonic()
 
