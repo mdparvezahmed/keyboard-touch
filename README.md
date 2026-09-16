@@ -240,41 +240,29 @@ Tune `pointer_speed`, or turn that setting off in Mouse Properties.
 
 ---
 
-## Run the Mac side automatically at boot
+## Run the Mac side at power-on, on the login screen
 
-Handy when the Mac mini has no keyboard attached. Create
-`~/Library/LaunchAgents/com.local.wkm.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>com.local.wkm</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/Users/YOU/wirelessmousekeyboard/.venv/bin/python3</string>
-    <string>-m</string><string>wkm</string><string>target</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>/Users/YOU/wirelessmousekeyboard</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/tmp/wkm.log</string>
-  <key>StandardErrorPath</key><string>/tmp/wkm.err</string>
-</dict>
-</plist>
-```
+`mac-setup.sh` starts wkm once you log in. To have it working from power-on, so
+the laptop can type your login password, run this instead:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.local.wkm.plist
+bash scripts/mac-boot-setup.sh
 ```
 
-Replace `YOU` with your username. The Accessibility permission must be granted
-to that exact python binary, and a launch agent is a different launch context
-than Terminal — so check `/tmp/wkm.err` and re-run `wkm doctor` if input stops
-working after switching to this.
+It installs a copy to `/usr/local/wkm` and adds two agents to
+`/Library/LaunchAgents`: one in front of the login window, one for the
+logged-in session (including the lock screen). Re-run it after changing the
+code or `wkm.toml`, since the installed copy does not follow the project folder.
+
+- **FileVault must be off.** With it on, power-on stops at the disk unlock
+  prompt, before anything on the disk can run.
+- **Why a copy.** macOS blocks background processes from reading `~/Desktop`,
+  `~/Documents` and `~/Downloads`, and nobody is there to click Allow at the
+  login window.
+- **Permission goes to `Python.app`**, inside the Python framework, not to the
+  venv's `python` symlink. The script prints the exact path.
+
+Logs are `/tmp/wkm.log` (logged in) and `/tmp/wkm-prelogin.log` (login screen).
 
 ---
 
